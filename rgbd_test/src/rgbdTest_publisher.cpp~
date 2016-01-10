@@ -1,0 +1,408 @@
+#include "ros/ros.h"
+#include "std_msgs/String.h"
+#include "sensor_msgs/Image.h"
+#include "sensor_msgs/CameraInfo.h"
+#include "sensor_msgs/Imu.h"
+#include "geometry_msgs/Quaternion.h"
+#include "geometry_msgs/Vector3.h"
+#include "ros/time.h"
+#include "sensor_msgs/image_encodings.h"
+
+#include <opencv2/highgui/highgui.hpp>
+#include <cv_bridge/cv_bridge.h>
+
+#include <sstream>
+#include <iostream>
+#include <string>
+#include <fstream>
+#include <cstdint>
+
+#include <boost/array.hpp>
+
+/**
+ * Gets next sensor reading from file given that the file follows a prespecified standard
+ *
+ * The prespecified standard is that the file is a csv, and each line is of the form 
+ * timestamp,value,value,value,(int)sensor_type. Value can be set to zero when N/A
+ * e.g. for cameras 
+ *
+ * @param file				pointer to csv file with readings
+ * @return            an array[5] that stores the current line being read or NULL
+ */
+
+double* get_next_reading(std::ifstream* file){
+
+	std::string value;
+	int count = 1;
+	
+
+	double* sensor_reading; 
+	if((*file).good()){
+		sensor_reading = new double[5];
+		while((*file).good() && count<6){
+			
+			
+			if(count <=4 ){			
+				std::getline ( *file, value, ',' ); //read string until next comma			
+			}	
+			else{
+				std::getline ( *file, value, '\n'); //read string until end
+			}
+
+			sensor_reading[count-1] = (double)atof(value.c_str());	
+			count++;
+		}
+	
+	}
+	else{		
+		return NULL;
+	}
+	//std::cout<<"got here"<<std::endl;
+	return sensor_reading;
+}
+
+/**
+ * This tutorial demonstrates simple sending of messages over the ROS system.
+ */
+int main(int argc, char **argv)
+{
+  /**
+   * The ros::init() function needs to see argc and argv so that it can perform
+   * any ROS arguments and name remapping that were provided at the command line.
+   * For programmatic remappings you can use a different version of init() which takes
+   * remappings directly, but for most command-line programs, passing argc and argv is
+   * the easiest way to do it.  The third argument to init() is the name of the node.
+   *
+   * You must call one of the versions of ros::init() before using any other
+   * part of the ROS system.
+   */
+  ros::init(argc, argv, "rgbdTest_publisher");
+
+  /**
+   * NodeHandle is the main access point to communications with the ROS system.
+   * The first NodeHandle constructed will fully initialize this node, and the last
+   * NodeHandle destructed will close down the node.
+   */
+  ros::NodeHandle n;
+
+  /**
+   * The advertise() function is how you tell ROS that you want to
+   * publish on a given topic name. This invokes a call to the ROS
+   * master node, which keeps a registry of who is publishing and who
+   * is subscribing. After this advertise() call is made, the master
+   * node will notify anyone who is trying to subscribe to this topic name,
+   * and they will in turn negotiate a peer-to-peer connection with this
+   * node.  advertise() returns a Publisher object which allows you to
+   * publish messages on that topic through a call to publish().  Once
+   * all copies of the returned Publisher object are destroyed, the topic
+   * will be automatically unadvertised.
+   *
+   * The second parameter to advertise() is the size of the message queue
+   * used for publishing messages.  If messages are published more quickly
+   * than we can send them, the number here specifies how many messages to
+   * buffer up before throwing some away.
+   */
+  ros::Publisher img_pub = n.advertise<sensor_msgs::Image>("/camera/rgb/image_color", 1000);
+	ros::Publisher depth_img_pub = n.advertise<sensor_msgs::Image>("/camera/depth/image", 1000);
+
+	ros::Publisher img_info_pub = n.advertise<sensor_msgs::CameraInfo>("/camera/rgb/camera_info", 1000);
+	ros::Publisher depth_img_info_pub = n.advertise<sensor_msgs::CameraInfo>("/camera/depth/camera_info", 1000);
+		
+
+
+  ros::Rate loop_rate(100);
+
+	std::ifstream sensor_file("/home/ee125/Documents/code/slam-data/study_set/timestamps/merged_timestamps.csv");
+  /**
+	std::string input = "y";
+	while(input.compare("y") == 0){
+	double* temp;
+	temp = get_next_reading(&sensor_file);
+	std::cout<<"here"<<std::endl;
+	std::cout<< temp[0]<<","<<temp[1]<<","<<temp[2]<<","<<temp[3]<<","<<temp[4] <<std::endl;
+	std::cout << '\n' <<"Press a key to continue..."<<std::endl;
+	input = "";
+	std::cin >> input;
+	delete[] temp;
+	temp = NULL;
+	
+	}
+  **/
+
+ //msg to be displayed in case of error
+	std_msgs::String msgr;
+	msgr.data = "Can't open file";
+
+
+ //get video from location
+	cv::VideoCapture cap("/home/ee125/Documents/code/slam-data/study_set/imgs/img_%02d.jpg");
+  std::string depth_location ="/home/ee125/Documents/code/slam-data/study_set/DepthMap/";
+
+
+	//do some preprocessing
+	  double covarianceMatrix[9] = {0.0, 0.0, 0.0, 0.0,0.0, 0.0, 0.0, 0.0, 0.0};
+	  geometry_msgs::Quaternion orientation;
+	  orientation.x = 0.0;
+	  orientation.y = 0.0;
+	  orientation.z = 0.0;
+	  orientation.w = 0.0;
+
+	  sensor_msgs::Imu acc_msg;
+	  sensor_msgs::Imu gyr_msg;
+
+	  acc_msg.orientation = orientation;
+	  
+	  acc_msg.angular_velocity.x = 0.0;
+	  acc_msg.angular_velocity.y = 0.0;
+	  acc_msg.angular_velocity.z = 0.0;
+	 
+	  gyr_msg.linear_acceleration.x = 0.0;
+	  gyr_msg.linear_acceleration.y = 0.0;
+	  gyr_msg.linear_acceleration.z = 0.0;
+	
+	    
+
+	  for(int i =0; i <9; i++){
+
+			acc_msg.orientation_covariance[i] = covarianceMatrix[i];
+	  	acc_msg.angular_velocity_covariance[i] = covarianceMatrix[i];
+	  	acc_msg.linear_acceleration_covariance[i] = covarianceMatrix[i];
+
+
+		  gyr_msg.orientation_covariance[i] = covarianceMatrix[i];
+		  gyr_msg.angular_velocity_covariance[i] = covarianceMatrix[i];
+		  gyr_msg.linear_acceleration_covariance[i] = covarianceMatrix[i];
+	
+	
+	  }
+
+ 	double frame_float = 0;
+	uint32_t height = 480;
+	uint32_t width = 640;
+	std::string distortion_model = "plumb_bob";
+	double D1 [] = {0.920523,0.0,0.0,0.0,0.0};
+	std::vector<double> D(D1, D1 + sizeof D1 / sizeof D1[0]);
+
+	boost::array<double, 9> K = {257.760,0.0,324.060,0.0,257.479,243.954,0.0,0.0,1.0};
+	//std::vector<double> K(K1, K1 + sizeof K1 / sizeof K1[0]);
+
+	boost::array<double, 9>  R = {1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0};
+	boost::array<double, 12> P = {257.760,0.0,324.060,0.0,0.0,257.479,243.954,0.0,0.0,0.0,1.0,0.0};
+	
+	sensor_msgs::CameraInfo img_info;
+	img_info.height = height;
+	img_info.width = width;
+	img_info.distortion_model = distortion_model;
+	img_info.D = D;
+	img_info.K = K;
+	img_info.R = R;
+	img_info.P = P;
+
+	sensor_msgs::CameraInfo depth_img_info;
+	depth_img_info.height = height;
+	depth_img_info.width = width;
+	depth_img_info.distortion_model = distortion_model;
+	depth_img_info.D = D;
+	depth_img_info.K = K;
+	depth_img_info.R = R;
+	depth_img_info.P = P;
+
+	cv::namedWindow("view"); 
+
+
+	// Check if video device can be opened with the given index
+	if(!cap.isOpened()){ 
+	 
+			ROS_INFO("%s",msgr.data.c_str());	
+		 	return 1;
+	}
+	cv::Mat frame;
+	sensor_msgs::ImagePtr img_msg;
+	sensor_msgs::ImagePtr depth_msg;
+
+	int depth_count = 0;
+	std::string temp_string = "";
+	int depth_started = 0;
+/**
+	for( int i = 1 ; i<= 344; i++){
+	 	 
+			cap >> frame;
+	}
+**/
+ 
+  while (ros::ok())
+  {
+      
+    /**
+     * The publish() function is how you send messages. The parameter
+     * is the message object. The type of this object must agree with the type
+     * given as a template parameter to the advertise<>() call, as was done
+     * in the constructor above.
+     */
+    //chatter_pub.publish(msg);
+
+
+		 double* sensor_float;
+
+		 sensor_float = get_next_reading(&sensor_file);
+		 if(sensor_float != NULL){
+     		
+		 	switch ((int)sensor_float[4]) {
+
+		   	case 1:
+		    {
+
+/**
+		    	//ros::Time t1(sensor_float[0]);
+		    	// acc_msg.header.stamp.sec = 0;
+					//acc_msg.header.stamp = t1;
+					acc_msg.header.stamp.fromSec(sensor_float[0]);
+					acc_msg.linear_acceleration.x = sensor_float[1];
+					acc_msg.linear_acceleration.y = sensor_float[2];
+					acc_msg.linear_acceleration.z = sensor_float[3];
+
+					ROS_INFO("Just pub'd acc_msg %f,%f,%f",acc_msg.linear_acceleration.x,acc_msg.linear_acceleration.y,acc_msg.linear_acceleration.z);
+	   			acc_pub.publish(acc_msg);
+					delete []sensor_float;
+
+**/
+
+		   		break;
+		    }
+		    case 2:
+	      {
+
+/**
+			 //ros::Time t2(sensor_float[0]);
+		 	 //std::cout<<sensor_float[0]<<endl;
+			 //gyr_msg.header.stamp.sec = 0;
+			 		gyr_msg.header.stamp.fromSec(sensor_float[0]);
+			 		gyr_msg.angular_velocity.x = sensor_float[1];
+			 		gyr_msg.angular_velocity.y = sensor_float[2];
+			 		gyr_msg.angular_velocity.z = sensor_float[3];
+
+			 		ROS_INFO("Just pub'd gyr_msg %f,%f,%f",gyr_msg.angular_velocity.x,gyr_msg.angular_velocity.y,gyr_msg.angular_velocity.z);	
+			 		gyr_pub.publish(gyr_msg);
+				  delete []sensor_float;
+**/
+
+		    	break;
+		    }
+		    case 3:
+		    {
+					cap >> frame;
+			 // Check if grabbed frame is actually full with some content
+		    	if(!frame.empty()) {
+				//cvtColor(frame, frame, CV_YUV2RGB_YV12, 3);
+				//msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", frame).toImagemsg();
+			     	img_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", frame).toImageMsg();
+				//msg = cv_bridge::CvImage(std_msgs::Header(), "mono8",cv_bridge::toCvShare(msg, "mono8")->image).toImagemsg();
+			     
+						std_msgs::Header head;
+				//if(frame_float != 0){
+
+				 
+				// std::cout<<frame_float<<std::endl;
+				//ros::Time theTime(sensor_float[0]);
+				//head.stamp = theTime;
+						head.stamp.fromSec(sensor_float[0]);
+	
+				//}
+
+				//msg = cv_bridge::CvImage(head, "mono8",cv_bridge::toCvShare(msg, "mono8")->image).toImagemsg();
+						img_msg = cv_bridge::CvImage(head, "bgr8",cv_bridge::toCvShare(img_msg, "bgr8")->image).toImageMsg();
+						img_msg->encoding = sensor_msgs::image_encodings::BGR8;
+				//newImage.encoding = sensor_msgs::image_encodings::TYPE_8UC1;
+				// msg = newImage.toImagemsg();
+				//ROS_INFO("%s",msgr.data.c_str());
+						img_info.header = head;
+
+						img_pub.publish(img_msg);
+						img_info_pub.publish(img_info);
+						
+						//send fake depth
+						if(depth_started == 1){
+
+							depth_msg->header = head;
+							depth_img_info.header = head;
+							depth_img_pub.publish(depth_msg);
+							depth_img_info_pub.publish(depth_img_info);
+						}
+			     
+						cv:imshow("view", cv_bridge::toCvShare(img_msg, "bgr8")->image);
+						cv::waitKey(30);
+			     
+				//cv::waitKey(1);
+						ROS_INFO("Just published image_msg %u, %u",((img_msg->header).stamp).sec,((img_msg->header).stamp).nsec);
+						delete []sensor_float;	
+					}
+
+		      else{
+					 delete []sensor_float;
+					 break;
+					}
+
+		   	 break;
+		     }
+				 case 4:
+				 {
+
+					if(depth_count > 574){
+						
+						depth_started = 0;
+						break;
+
+
+					}
+					
+					depth_started = 1;
+					cv::Mat depth_img;
+					char stemp[100] = "";
+					sprintf(stemp,"%02d",depth_count); 
+					temp_string = stemp;
+					//std::cout<< temp_string << std::endl;
+					std::string demoFile  = depth_location + temp_string + ".yml";
+					
+
+					cv::FileStorage fsDemo( demoFile, cv::FileStorage::READ);
+    			fsDemo["img"] >> depth_img;
+					fsDemo.release();
+					
+					//std::cout << depth_img << std::endl << std::endl;
+					std_msgs::Header head;
+					head.stamp.fromSec(sensor_float[0]);
+
+					depth_msg = cv_bridge::CvImage(head, "32FC1", depth_img).toImageMsg();
+					depth_msg->encoding = sensor_msgs::image_encodings::TYPE_32FC1;
+					
+					depth_img_info.header = head;
+
+					depth_img_pub.publish(depth_msg);
+					depth_img_info_pub.publish(depth_img_info);
+					ROS_INFO("Just published depth_msg %u, %u,%d",((depth_msg->header).stamp).sec,((depth_msg->header).stamp).nsec,depth_count);
+					
+					//std::cout << depth_count <<std::endl;
+					depth_count++;
+
+    			delete []sensor_float;
+				  break;
+				 }
+
+					
+			}
+		}
+
+		else{
+			std::cout<<"sensor_float is NULL"<<std::endl;			    
+			   
+		}
+
+    ros::spinOnce();
+
+    loop_rate.sleep();
+    
+  }
+
+
+  return 0;
+}
